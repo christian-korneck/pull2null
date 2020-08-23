@@ -1,0 +1,160 @@
+#!/bin/bash
+#set -x
+
+if [ "$1" == "-h" ] || [ "$2" == "-h" ] || [ "$1" == "--help" ] || [ "$2" == "--help" ] ; then
+  echo '
+Usage:
+  pull2null [flags] NAME
+
+Description:
+  script to "dummy"-pull all container images for a given container repo name
+  (to prevent the container registry to purge images after a periode of inactivity) 
+
+Flags:
+  --dry-run			get metadata but does not actually pull (warning: login will persist!)
+  -h, --help			help for this command
+
+Args:
+  NAME				container repo (example: docker.io/my-user/my-repo)
+
+Optional env vars for Docker Login (to increase the rate limit):
+  INPUT_DOCKER_USER		username for container registry
+  INPUT_DOCKER_PASSWORD		password for container registry
+  INPUT_REGISTRY_SERVER		the registry server name (for Docker Hub use: \"docker.io\" )
+
+  '
+  exit 0
+fi
+
+if grep -iq "\-\-dry-run" <<< "$1"; then
+  echo dry run enabled
+  dryrun=1
+  export CREF=$2
+else
+  export CREF=$1
+fi
+
+tmp_dir=$(mktemp -d -t pull2null-XXXXXXXXXX)
+if [[ ! -d $tmp_dir ]]; then
+  echo 'ERROR - could not create temp dir ($tmp_dir)' >> /dev/stderr
+  exit 1
+fi
+trap "rm -Rf $tmp_dir" EXIT
+
+if [ "$INPUT_DOCKER_USER" != "" ] && [ "$INPUT_REGISTRY_SERVER" == "" ]; then
+  INPUT_REGISTRY_SERVER=docker.io
+fi
+
+if [ "$INPUT_DOCKER_USER" != "" ] && [ "$INPUT_DOCKER_PASSWORD" != "" ]; then
+  podman --storage-driver=vfs login --username "$INPUT_DOCKER_USER" --password "$INPUT_DOCKER_PASSWORD" "$INPUT_REGISTRY_SERVER"
+  if [ "$?" != "0" ]; then
+    echo 'WARNING - Login to registry server failed. We will still try unauthenticated'
+  fi
+fi
+
+if [ "$CREF" == "" ]; then
+  echo 'ERROR - no container ref passed as argument (ex: pull2null docker.io/my-user/my-container)' >> /dev/stderr
+  exit 1
+fi
+
+tags=$(skopeo list-tags docker://$CREF)
+if [ "$?" != "0" ]; then
+  echo ERROR - could not get tags for ref >> /dev/stderr
+  exit 1
+fi
+tags=$(echo "$tags" | jq -r '.Tags[]')
+
+digests=
+ctags=
+while read tag ; do
+  manifest=$(skopeo inspect --raw docker://$CREF:$tag)
+  digests_manifest=$(echo "$manifest" | jq -r ".manifests[]? | [.platform.os?,.digest?] | @tsv")
+  digest_config=$(echo "$manifest" | jq -r ".config? | .digest? | @text")
+  if [ "$digests_manifest" != ""  ]; then
+    if [ "$digests" != "" ]; then
+      digests=$digests$'\n'$digests_manifest
+    else
+      digests=$digests_manifest
+    fi
+  fi
+  if [ "$digest_config" != "null" ] && [ "$digest_config" != "" ] && [ "$digest_config" != "\t" ]; then
+    if [ "$ctags" != "" ]; then
+      ctags=$ctags$'\n'$tag
+    else
+      ctags=$tag
+    fi
+  fi
+done <<< "$(echo -e "$tags")"
+
+digests_dedup=$(echo "$digests" | sort | uniq | sed '/^[[:space:]]*$/d')
+ctags_dedup=$(echo "$ctags" | sort | uniq | sed '/^[[:space:]]*$/d')
+
+count_digests=$(echo "$digests_dedup" | wc -l)
+count_ctags=$(echo "$ctags_dedup" | wc -l)
+if [ "$digests_dedup"  == "" ]; then count_digests=0; fi
+if [ "$ctags_dedup" == "" ]; then count_ctags=0; fi
+
+echo "-------------- the plan: ----------------"
+echo 'We will try to pull the following...:'
+echo $'\n'
+echo "$count_digests manifest digests (as generated i.e. by docker buildx):"
+echo "$digests_dedup"
+echo $'\n'
+echo "$count_ctags config tags (as generated i.e. by docker build and Docker Hub automated builds):"
+echo "(These will get deduplicated during pull)"
+echo "$ctags_dedup"
+echo $'\n'
+echo "----------------------------------------"
+
+if [ "$dryrun" == "1" ]; then
+  exit 0
+fi
+
+if [ "$count_digests" == "0" ] && [ "$count_ctags" == "0"  ]; then
+  echo 'ERROR - it appears we have not found anything to pull. If this is not what you expected then something went badly wrong.' >> /dev/stderr
+  exit 1
+fi
+
+rm -f $tmp_dir/had_error
+
+if [ "$count_digests" != "0" ]; then
+  echo "$digests_dedup" | awk -F$"\t" '{system("podman --storage-driver=vfs pull --override-os="$1 " $CREF@"$2 "; if [ $? != 0 ]; then touch $tmp_dir/had_error; fi")}{system("podman --storage-driver=vfs image prune --all --force")}' 
+fi
+
+if [ "$count_ctags" != "0" ]; then
+  if [ "$ctags_dedup" != "" ]; then
+   ctags_done=
+   while read ctag ; do
+     tagdigest=$(skopeo inspect --raw docker://$CREF:$ctag | jq -r ".config? | .digest? | @text")
+     already_pulled=0
+     if grep -Fxq "$tagdigest" <<< "$ctags_done"; then already_pulled=1; fi
+     if [ "$already_pulled" != "1" ]; then
+       podman --storage-driver=vfs pull $CREF:$ctag
+       if [ $? != 0 ]; then touch $tmp_dir/had_error; fi
+       ctag_done="sha256:"$(podman --storage-driver=vfs image inspect $CREF:$ctag | jq -r '.[].Id')
+       if [ "$ctag_done" != "null" ] && [ "$ctag_done" != "" ]; then
+         if [ "$ctags_done" != "" ]; then
+           ctags_done=$ctags_done$'\n'$ctag_done
+         else
+           ctags_done=$ctag_done
+         fi
+       fi
+       podman --storage-driver=vfs image prune --force --all
+     fi
+   done <<< "$(echo -e "$ctags")"
+   ctags_done=$(echo "$ctags_done" | sort | uniq | sed '/^[[:space:]]*$/d')
+  fi
+fi
+
+if [ $? != 0 ]; then
+  echo 'ERROR - unexpected error. Check output above.' >> /dev/stderr
+  exit 1
+fi
+
+if [ -f $tmp_dir/had_error ]; then
+  echo 'ERROR - not all images found in the manifest could be pulled. Check output above.' >> /dev/stderr
+  exit 1
+fi
+
+exit 0
+

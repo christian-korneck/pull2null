@@ -1,0 +1,56 @@
+name: Release
+on:
+  push:
+    # Sequence of patterns matched against refs/tags
+    tags:
+      - 'v*' # Push events to matching v*, i.e. v1.0, v20.15.10
+
+# A workflow run is made up of one or more jobs that can run sequentially or in parallel
+jobs:
+  # This workflow contains a single job called "build"
+  build-docker:
+    # The type of runner that the job will run on
+    runs-on: ubuntu-latest
+
+    # Steps represent a sequence of tasks that will be executed as part of the job
+    steps:
+    # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
+    - uses: actions/checkout@v2
+    
+    - name: Split tag string into semantic version parts
+      id: semver
+      run: |
+        git fetch --tags
+        git tag #for debug
+        export vcur=$(git tag --sort=-v:refname | head -1 | sed 's/v//1')
+        export vmajor=$(echo $vcur | cut -d. -f1)
+        export vminor=$(echo $vcur | cut -d. -f2)
+        export vpatch=$(echo $vcur | cut -d. -f3)
+        echo ::set-output name=vcur::$vcur
+        echo ::set-output name=vmajor::$vmajor
+        echo ::set-output name=vminor::$vminor
+        echo ::set-output name=vpatch::$vpatch
+        echo version: $vcur
+        echo version major: $vmajor
+        echo version minor: $vminor
+        echo version patch: $vpatch
+
+    - name: Build and push Docker images
+      uses: docker/build-push-action@v1
+      with:
+        username: chko
+        password: ${{ secrets.DOCKER_PASSWORD }}
+        repository: chko/pull2null
+        tags:
+          latest,${{ steps.semver.outputs.vcur }},${{ steps.semver.outputs.vmajor }}
+          
+    - name: push README to Dockerhub
+      uses: christian-korneck/update-container-description-action@v1
+      env:
+        DOCKER_USER: chko
+        DOCKER_PASS: ${{ secrets.DOCKER_PASSWORD }}
+      with:
+        destination_container_repo: chko/pull2null
+        provider: dockerhub
+        short_description: 'dummy-pull all container images from a repo to avoid inactivity purge'
+        readme_file: 'README.md'
