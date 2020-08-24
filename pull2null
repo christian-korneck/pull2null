@@ -12,6 +12,8 @@ Description:
 
 Flags:
   --dry-run			get metadata but does not actually pull (warning: login will persist!)
+  --no-delete			dont delete layers between pulls (prevents that layers get downloaded more
+				then once, but needs more disk space)
   -h, --help			help for this command
 
 Args:
@@ -26,12 +28,16 @@ Optional env vars for Docker Login (to increase the rate limit):
   exit 0
 fi
 
-if grep -iq "\-\-dry-run" <<< "$1"; then
+export CREF=${@: -1}
+
+if grep -iq "\-\-dry-run" <<< "$*"; then
   echo dry run enabled
   dryrun=1
-  export CREF=$2
-else
-  export CREF=$1
+fi
+
+if grep -iq "\-\-no-delete" <<< "$*"; then
+  echo 'no delete mode enabled (WARNING: be aware that this might use a lot of disk space!)'
+  export NO_DELETE_MODE=1
 fi
 
 tmp_dir=$(mktemp -d -t pull2null-XXXXXXXXXX)
@@ -118,7 +124,7 @@ fi
 rm -f $tmp_dir/had_error
 
 if [ "$count_digests" != "0" ]; then
-  echo "$digests_dedup" | awk -F$"\t" '{system("podman --storage-driver=vfs pull --override-os="$1 " $CREF@"$2 "; if [ $? != 0 ]; then touch $tmp_dir/had_error; fi")}{system("podman --storage-driver=vfs image prune --all --force")}' 
+  echo "$digests_dedup" | awk -F$"\t" '{system("podman --storage-driver=vfs pull --override-os="$1 " $CREF@"$2 "; if [ $? != 0 ]; then touch $tmp_dir/had_error; fi")}{system("if [ \"$NO_DELETE_MODE\" != \"1\" ]; then  podman --storage-driver=vfs image prune --all --force; fi")}' 
 fi
 
 if [ "$count_ctags" != "0" ]; then
@@ -139,7 +145,7 @@ if [ "$count_ctags" != "0" ]; then
            ctags_done=$ctag_done
          fi
        fi
-       podman --storage-driver=vfs image prune --force --all
+       if [ "$NO_DELETE_MODE" != "1"  ]; then podman --storage-driver=vfs image prune --force --all; fi
      fi
    done <<< "$(echo -e "$ctags")"
    ctags_done=$(echo "$ctags_done" | sort | uniq | sed '/^[[:space:]]*$/d')
