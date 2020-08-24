@@ -47,7 +47,13 @@ Optional env vars for Docker Login (to increase the rate limit):
 ### Can it pull Windows container images?
 Yes
 
+### Does it work for large repos? What about pull rate limits?
+Docker Hub pull rate limits currently seem to be at 100 pulls per 6 hours for unauthenticated user, 200 for authenticated users and unlimited (or so) for paid accounts. You can pass a registry login to the script via env vars (see example above) to increase the rate limit. To see how many pulls would be necessary for a particular repo you can run `--dry-run` that prints the count.
+
 ### Is it treating the container registry's resources nicely?
-Partly. It doesn't pull an image twice, even if that image is available under multiple tags. However it doesn't keep layers between pulls as it's intended to run on small CI runners and cloud instances with not much disk space. Please don't run it more often then necessary (i.e. every 6 months).
+Partly. It doesn't pull an image twice, even if that image is available under multiple tags. However by default it doesn't keep layers between pulls as it's intended to run on small CI runners and cloud instances with not much disk space. If you have enough disk space you can use `--no-delete`, which leads to less downloads. Please don't run this script  more often then necessary (i.e. every 6 months) to not cause unnecessary traffic for your registry provider.
 
+# Related
 
+- new Docker Hub retention limit (starting 1-Nov-2020): [FAQ](https://www.docker.com/pricing/resource-consumption-updates) and [blog post](https://www.docker.com/blog/scaling-dockers-business-to-serve-millions-more-developers-storage/)
+- new Docker Hub pull rate limits: [blog post](https://www.docker.com/blog/scaling-docker-to-serve-millions-more-developers-network-egress/)
