@@ -55,5 +55,5 @@ Partly. It doesn't pull an image twice, even if that image is available under mu
 
 # Related
 
-- new Docker Hub retention limit (starting 1-Nov-2020): [FAQ](https://www.docker.com/pricing/resource-consumption-updates) and [blog post](https://www.docker.com/blog/scaling-dockers-business-to-serve-millions-more-developers-storage/)
+- new Docker Hub retention limit (starting ~~1-Nov-2020)~~ mid 2021): [FAQ](https://www.docker.com/pricing/resource-consumption-updates) and [blog post](https://www.docker.com/blog/scaling-dockers-business-to-serve-millions-more-developers-storage/) and [blog update (delay to mid 2021)](https://www.docker.com/blog/docker-hub-image-retention-policy-delayed-and-subscription-updates/)
 - new Docker Hub pull rate limits: [blog post](https://www.docker.com/blog/scaling-docker-to-serve-millions-more-developers-network-egress/)
